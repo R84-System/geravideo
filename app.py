@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import numpy as np
 import fastf1
+from fastf1.exceptions import DataNotLoadedError
 import streamlit as st
 
 # Configura o FFmpeg integrado
@@ -16,46 +17,79 @@ os.makedirs('cache_f1', exist_ok=True)
 fastf1.Cache.enable_cache('cache_f1')
 
 
-def gerar_video_customizado(ano, gp, tipo_sessao, p1_code, p2_code, volta_inicio, volta_fim, duracao_segundos, fps=30):
+@st.cache_data(show_spinner=False)
+def carregar_calendario(ano):
+    """Carrega automaticamente o calendário oficial do ano selecionado via FastF1."""
+    try:
+        schedule = fastf1.get_event_schedule(ano)
+        # Filtra etapas válidas (remove sessões de testes de pré-temporada)
+        schedule = schedule[schedule['EventFormat'] != 'testing']
+        
+        opcoes = []
+        for _, row in schedule.iterrows():
+            nome_formatado = f"Etapa {row['RoundNumber']:02d} - {row['EventName']} ({row['Location']})"
+            opcoes.append({
+                "label": nome_formatado,
+                "round": int(row['RoundNumber']),
+                "name": row['EventName']
+            })
+        return opcoes
+    except Exception:
+        return []
+
+
+def gerar_video_customizado(ano, round_number, gp_nome, tipo_sessao, p1_code, p2_code, volta_inicio, volta_fim, duracao_segundos, fps=30):
     total_frames = duracao_segundos * fps
 
-    # Tenta obter a sessão
+    # 1. Carrega a sessão oficial pelo número da etapa
     try:
-        session = fastf1.get_session(ano, gp, tipo_sessao)
-        session.load(laps=True, telemetry=True, weather=False)
+        session = fastf1.get_session(ano, round_number, tipo_sessao)
+        session.load(laps=True, telemetry=True, weather=False, messages=False)
     except Exception as e:
-        raise ValueError(f"Não foi possível descarregar os dados do GP '{gp}' ({ano}). Verifique se o nome do GP está correto (ex: 'Sao Paulo', 'Monaco', 'Silverstone').")
+        raise ValueError(f"Não foi possível descarregar os dados para o {gp_nome} ({ano}). Erro: {e}")
 
-    if not hasattr(session, 'laps') or session.laps is None or len(session.laps) == 0:
-        raise ValueError("A sessão foi encontrada, mas não existem dados de voltas disponíveis para esta etapa.")
+    # 2. Valida se as voltas foram carregadas
+    try:
+        laps = session.laps
+        if laps is None or len(laps) == 0:
+            raise ValueError("Nenhum dado de volta foi encontrado para esta sessão.")
+    except DataNotLoadedError:
+        raise ValueError("A telemetria não pôde ser carregada do servidor da F1. Tente novamente em alguns instantes.")
 
-    # Filtra os pilotos
-    laps_p1 = session.laps.pick_driver(p1_code)
-    laps_p2 = session.laps.pick_driver(p2_code)
+    # 3. Filtra os pilotos selecionados
+    pilotos_disponiveis = sorted(laps['Driver'].unique()) if 'Driver' in laps else []
+
+    try:
+        laps_p1 = laps.pick_driver(p1_code)
+        laps_p2 = laps.pick_driver(p2_code)
+    except Exception as e:
+        raise ValueError(f"Erro ao filtrar pilotos na sessão: {e}")
 
     if len(laps_p1) == 0:
-        pilotos_disponiveis = ", ".join(sorted(session.laps['Driver'].unique()))
-        raise ValueError(f"O piloto '{p1_code}' não foi encontrado nesta sessão. Pilotos disponíveis: {pilotos_disponiveis}")
+        raise ValueError(f"O piloto '{p1_code}' não participou desta sessão. Pilotos presentes: {', '.join(pilotos_disponiveis)}")
 
     if len(laps_p2) == 0:
-        pilotos_disponiveis = ", ".join(sorted(session.laps['Driver'].unique()))
-        raise ValueError(f"O piloto '{p2_code}' não foi encontrado nesta sessão. Pilotos disponíveis: {pilotos_disponiveis}")
+        raise ValueError(f"O piloto '{p2_code}' não participou desta sessão. Pilotos presentes: {', '.join(pilotos_disponiveis)}")
 
-    # Filtra o intervalo de voltas
+    # 4. Filtra o intervalo de voltas
     laps_p1 = laps_p1[(laps_p1['LapNumber'] >= volta_inicio) & (laps_p1['LapNumber'] <= volta_fim)]
     laps_p2 = laps_p2[(laps_p2['LapNumber'] >= volta_inicio) & (laps_p2['LapNumber'] <= volta_fim)]
 
     if len(laps_p1) == 0 or len(laps_p2) == 0:
-        max_volta = int(session.laps['LapNumber'].max())
-        raise ValueError(f"Sem dados para o intervalo de voltas {volta_inicio} a {volta_fim}. O número máximo de voltas registado nesta sessão foi {max_volta}.")
+        max_volta = int(laps['LapNumber'].max())
+        raise ValueError(f"Sem dados para as voltas {volta_inicio} a {volta_fim}. O número máximo de voltas registado nesta sessão foi {max_volta}.")
 
-    tel1 = laps_p1.get_telemetry()
-    tel2 = laps_p2.get_telemetry()
+    # 5. Obtém telemetria dos dois carros
+    try:
+        tel1 = laps_p1.get_telemetry()
+        tel2 = laps_p2.get_telemetry()
+    except DataNotLoadedError:
+        raise ValueError("A telemetria de GPS não está disponível para o intervalo de voltas selecionado.")
 
     if len(tel1) == 0 or len(tel2) == 0:
-        raise ValueError("Não foi possível extrair a telemetria das voltas selecionadas.")
+        raise ValueError("A telemetria do traçado para estas voltas está vazia.")
 
-    # Reamostragem para animação
+    # 6. Reamostragem para animação fluida
     time_orig1 = np.linspace(0, 1, len(tel1))
     time_orig2 = np.linspace(0, 1, len(tel2))
     target_time = np.linspace(0, 1, total_frames)
@@ -66,22 +100,22 @@ def gerar_video_customizado(ano, gp, tipo_sessao, p1_code, p2_code, volta_inicio
     x2_interp = np.interp(target_time, time_orig2, tel2['X'])
     y2_interp = np.interp(target_time, time_orig2, tel2['Y'])
 
-    # Figura 9:16 (Vertical)
+    # 7. Renderização da Figura 9:16 (Vertical TikTok)
     fig, ax = plt.subplots(figsize=(9, 16), facecolor='#0e0e10')
     ax.set_facecolor('#0e0e10')
     ax.axis('off')
 
-    # Traçado
+    # Desenho do traçado
     ax.plot(tel1['Y'], tel1['X'], color='#33333e', linewidth=3)
 
-    # Carros
+    # Posição dos carros
     p1, = ax.plot([], [], 'o', color='#1E41FF', markersize=14, label=p1_code)
     p2, = ax.plot([], [], 'o', color='#FF8000', markersize=14, label=p2_code)
 
-    # Textos
+    # Legendas
     ax.text(0.5, 0.96, f"{p1_code} vs {p2_code}", transform=ax.transAxes,
             color='white', fontsize=22, fontweight='bold', ha='center')
-    ax.text(0.5, 0.93, f"{gp} {ano}", transform=ax.transAxes,
+    ax.text(0.5, 0.93, f"{gp_nome} {ano}", transform=ax.transAxes,
             color='#aaaaaa', fontsize=14, ha='center')
 
     timer_text = ax.text(0.5, 0.89, '', transform=ax.transAxes, color='white', 
@@ -97,31 +131,61 @@ def gerar_video_customizado(ano, gp, tipo_sessao, p1_code, p2_code, volta_inicio
 
     anim = FuncAnimation(fig, update, frames=total_frames, interval=1000/fps, blit=True)
 
-    nome_arquivo = f"f1_{p1_code}_vs_{p2_code}_{gp}.mp4"
+    nome_arquivo = f"f1_{p1_code}_vs_{p2_code}_{ano}_R{round_number}.mp4"
     anim.save(nome_arquivo, writer='ffmpeg', fps=fps)
     plt.close(fig)
 
     return nome_arquivo
 
 
-# Interface Web (Streamlit)
+# --- Interface Web Streamlit ---
 st.set_page_config(page_title="Gerador F1 TikTok", layout="centered")
 
 st.title("🏎️ Gerador de Duelos F1 - TikTok")
-st.write("Escolha a corrida, os pilotos e o intervalo de voltas para criar o vídeo vertical.")
+st.write("Escolha a temporada, selecione o circuito no menu e configure a animação.")
 
 st.sidebar.header("⚙️ Configurações da Corrida")
 
+# 1. Seleção do Ano
 ano = st.sidebar.number_input("Ano da Temporada", min_value=2018, max_value=2026, value=2024)
-gp = st.sidebar.text_input("Nome da Pista / GP", value="Sao Paulo", help="Ex: Sao Paulo, Monaco, Silverstone, Monza, Spa")
-tipo_sessao = st.sidebar.selectbox("Tipo de Sessão", ["R", "Q", "FP1", "FP2", "FP3"], index=0, help="R = Corrida, Q = Qualificação")
+
+# 2. Carregamento dinâmico de todos os circuitos do ano
+lista_gps = carregar_calendario(ano)
+
+if lista_gps:
+    opcoes_labels = [item['label'] for item in lista_gps]
+    gp_selecionado_label = st.sidebar.selectbox("Selecione o Grande Prêmio / Circuito", opcoes_labels)
+    
+    # Obtém o número e nome oficial do GP selecionado
+    gp_info = next(item for item in lista_gps if item['label'] == gp_selecionado_label)
+    round_number = gp_info['round']
+    gp_nome = gp_info['name']
+else:
+    st.sidebar.error("Não foi possível carregar a lista de circuitos para este ano.")
+    round_number = 1
+    gp_nome = "GP"
+
+# 3. Tipo de Sessão
+tipo_sessao_map = {
+    "Corrida (Race)": "R",
+    "Qualificação (Qualifying)": "Q",
+    "Treino Livre 1 (FP1)": "FP1",
+    "Treino Livre 2 (FP2)": "FP2",
+    "Treino Livre 3 (FP3)": "FP3",
+    "Sprint": "S"
+}
+tipo_sessao_label = st.sidebar.selectbox("Tipo de Sessão", list(tipo_sessao_map.keys()))
+tipo_sessao = tipo_sessao_map[tipo_sessao_label]
 
 st.sidebar.header("🏁 Pilotos e Voltas")
+
+pilotos_frequentes = ["VER", "NOR", "LEC", "HAM", "SAI", "PIA", "RUS", "ALO", "PER", "TSU", "HUL", "ALB", "GAS", "OCO", "STR", "MAG", "BOT", "ZHO", "SAR", "BEA", "LAW", "COL"]
+
 col1, col2 = st.sidebar.columns(2)
 with col1:
-    p1_code = st.text_input("Piloto 1 (3 letras)", value="VER").upper()
+    p1_code = st.selectbox("Piloto 1", pilotos_frequentes, index=0)
 with col2:
-    p2_code = st.text_input("Piloto 2 (3 letras)", value="NOR").upper()
+    p2_code = st.selectbox("Piloto 2", pilotos_frequentes, index=1)
 
 col3, col4 = st.sidebar.columns(2)
 with col3:
@@ -131,12 +195,14 @@ with col4:
 
 duracao_segundos = st.sidebar.slider("Duração do Vídeo (segundos)", min_value=15, max_value=120, value=60, step=15)
 
+# Botão principal
 if st.button("🚀 Gerar Vídeo Personalizado", type="primary"):
     try:
-        with st.spinner(f"A carregar a telemetria e a gerar o vídeo de {p1_code} vs {p2_code}..."):
+        with st.spinner(f"A descarregar telemetria e a gerar o vídeo de {p1_code} vs {p2_code}..."):
             nome_video = gerar_video_customizado(
                 ano=ano,
-                gp=gp,
+                round_number=round_number,
+                gp_nome=gp_nome,
                 tipo_sessao=tipo_sessao,
                 p1_code=p1_code,
                 p2_code=p2_code,
