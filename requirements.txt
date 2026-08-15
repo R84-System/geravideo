@@ -1,0 +1,7 @@
+fastf1
+matplotlib
+numpy
+pillow
+streamlit
+moviepy
+imageio-ffmpeg
