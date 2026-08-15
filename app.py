@@ -4,6 +4,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+from matplotlib.offsetbox import OffsetImage, AnnotationBbox
+from PIL import Image
 import numpy as np
 import streamlit as st
 
@@ -11,92 +13,104 @@ import streamlit as st
 plt.rcParams['animation.ffmpeg_path'] = imageio_ffmpeg.get_ffmpeg_exe()
 
 
-# --- GERADOR GEOMÉTRICO OFFLINE DE CIRCUITOS REAIS ---
-
-def gerar_pista_offline(nome_circuito, n_points=1000):
-    """Gera o formato característico das pistas sem precisar da API da F1."""
+def obter_trajeto_normalizado(nome_pista, n_points=500):
+    """Gera o trajeto de pontos (0 a 1) para o carro percorrer sobre a imagem."""
     t = np.linspace(0, 2 * np.pi, n_points)
     
-    if nome_circuito == "Sao Paulo (Interlagos)":
-        # Formato anti-horário com o 'S do Senna' e Reta dos Boxes
-        x = 100 * np.cos(t) + 30 * np.cos(2*t)
-        y = 60 * np.sin(t) + 20 * np.sin(3*t)
-    elif nome_circuito == "Monaco":
-        # Circuito travado, com a curva da Loews e o Túnel
-        x = 80 * np.cos(t) + 40 * np.cos(3*t)
-        y = 50 * np.sin(2*t) + 15 * np.cos(4*t)
-    elif nome_circuito == "Monza":
-        # Templo da Velocidade: retas longas e chicanes
-        x = 120 * np.cos(t) + 10 * np.cos(5*t)
-        y = 35 * np.sin(t)
-    elif nome_circuito == "Spa-Francorchamps":
-        # Traçado longo com o 'Eau Rouge' e a reta Kemmel
-        x = 110 * np.cos(t) + 25 * np.sin(2*t)
-        y = 70 * np.sin(t) + 30 * np.cos(3*t)
-    elif nome_circuito == "Silverstone":
-        # Curvas rápidas integradas (Maggotts e Becketts)
-        x = 90 * np.cos(t) + 35 * np.cos(2*t)
-        y = 65 * np.sin(t) + 25 * np.sin(3*t)
-    else:
-        # Oval genérico para testes
-        x = 100 * np.cos(t)
-        y = 50 * np.sin(t)
+    if "INTERLAGOS" in nome_pista.upper():
+        # Curvas características de Interlagos (S do Senna, Pinheirinho, Junção)
+        x = 0.5 + 0.35 * np.cos(t) + 0.08 * np.sin(2*t)
+        y = 0.5 + 0.28 * np.sin(t) - 0.12 * np.cos(3*t)
+    else: # MONZA por padrão
+        # Retas longas e chicanes
+        x = 0.5 + 0.38 * np.cos(t) + 0.12 * np.cos(3*t)
+        y = 0.5 + 0.22 * np.sin(t) + 0.05 * np.sin(2*t)
         
     return x, y
 
 
-# --- FUNÇÃO DE ANIMAÇÃO DA CORRIDA ---
-
-def gerar_video_duelo(gp_nome, p1_name, p2_name, ultrapassagem, duracao_segundos=30, fps=30):
+def gerar_video_hd(pista_nome, p1_code, p2_code, duracao_segundos=30, fps=30):
     total_frames = duracao_segundos * fps
-    x_track, y_track = gerar_pista_offline(gp_nome)
+
+    # Caminhos das imagens baseados nas suas pastas
+    pista_path = f"assets/tracks/{pista_nome}.jpg"
+    car1_path = f"assets/cars/{p1_code}.png"
+    car2_path = f"assets/cars/{p2_code}.png"
+
+    if not os.path.exists(pista_path):
+        raise FileNotFoundError(f"Imagem da pista não encontrada em: {pista_path}")
+    if not os.path.exists(car1_path):
+        raise FileNotFoundError(f"Imagem do carro não encontrada em: {car1_path}")
+    if not os.path.exists(car2_path):
+        raise FileNotFoundError(f"Imagem do carro não encontrada em: {car2_path}")
+
+    # Carregar imagem do circuito
+    pista_img = Image.open(pista_path)
+    largura, altura = pista_img.size
+
+    # Obter o trajeto e converter para os pixels da imagem
+    norm_x, norm_y = obter_trajeto_normalizado(pista_nome)
+    x_track = norm_x * largura
+    y_track = norm_y * altura
     num_pts = len(x_track)
 
-    # Lógica de simulação de ultrapassagem
-    if ultrapassagem:
-        # P1 começa atrás e ultrapassa no meio do vídeo
-        pos_p1 = np.linspace(0, num_pts * 1.05, total_frames) % num_pts
-        pos_p2 = np.linspace(15, num_pts * 0.98, total_frames) % num_pts
-    else:
-        # Disputa lado a lado constante
-        pos_p1 = np.linspace(0, num_pts * 1.02, total_frames) % num_pts
-        pos_p2 = np.linspace(5, num_pts * 1.00, total_frames) % num_pts
+    # Posições simuladas dos carros
+    pos_p1 = np.linspace(0, num_pts * 1.05, total_frames) % num_pts
+    pos_p2 = np.linspace(5, num_pts * 1.05, total_frames) % num_pts
 
-    # Configuração da figura 9:16 (Vertical TikTok)
-    fig, ax = plt.subplots(figsize=(9, 16), facecolor='#0e0e10')
+    # Carregar carros
+    car1_raw = Image.open(car1_path).convert("RGBA")
+    car2_raw = Image.open(car2_path).convert("RGBA")
+
+    # Configuração da Figura Vertical 9:16 (TikTok)
+    fig, ax = plt.subplots(figsize=(6, 10.6), facecolor='#0e0e10')
     ax.set_facecolor('#0e0e10')
+    ax.imshow(pista_img, extent=[0, largura, 0, altura])
     ax.axis('off')
 
-    # Desenho da Pista
-    ax.plot(x_track, y_track, color='#33333e', linewidth=5)
+    # Título do vídeo
+    ax.text(largura / 2, altura * 0.95, f"{p1_code} vs {p2_code}", 
+            color='white', fontsize=22, fontweight='bold', ha='center')
+    ax.text(largura / 2, altura * 0.92, f"GP DE {pista_nome}", 
+            color='#aaaaaa', fontsize=14, ha='center')
 
-    # Marcadores dos Carros
-    p1_line, = ax.plot([], [], 'o', color='#1E41FF', markersize=16, label=p1_name) # Azul
-    p2_line, = ax.plot([], [], 'o', color='#FF8000', markersize=16, label=p2_name) # Laranja
-
-    # Textos da Interface
-    ax.text(0.5, 0.95, f"{p1_name} vs {p2_name}", transform=ax.transAxes,
-            color='white', fontsize=24, fontweight='bold', ha='center')
-    ax.text(0.5, 0.92, f"GP de {gp_nome}", transform=ax.transAxes,
-            color='#aaaaaa', fontsize=16, ha='center')
-
-    timer_text = ax.text(0.5, 0.88, '', transform=ax.transAxes, 
-                         color='white', fontsize=14, fontweight='bold', ha='center')
+    box_p1 = [None]
+    box_p2 = [None]
 
     def update(frame):
+        if box_p1[0]: box_p1[0].remove()
+        if box_p2[0]: box_p2[0].remove()
+
         idx1 = int(pos_p1[frame])
         idx2 = int(pos_p2[frame])
 
-        p1_line.set_data([x_track[idx1]], [y_track[idx1]])
-        p2_line.set_data([x_track[idx2]], [y_track[idx2]])
+        x1, y1 = x_track[idx1], y_track[idx1]
+        x2, y2 = x_track[idx2], y_track[idx2]
 
-        tempo_decorrido = int(frame / fps)
-        timer_text.set_text(f"Tempo: {tempo_decorrido}s / {duracao_segundos}s")
-        return p1_line, p2_line, timer_text
+        # Rotação do carro para apontar na direção da curva
+        idx1_next = (idx1 + 1) % num_pts
+        angle1 = np.degrees(np.arctan2(y_track[idx1_next] - y1, x_track[idx1_next] - x1))
 
-    anim = FuncAnimation(fig, update, frames=total_frames, interval=1000/fps, blit=True)
+        idx2_next = (idx2 + 1) % num_pts
+        angle2 = np.degrees(np.arctan2(y_track[idx2_next] - y2, x_track[idx2_next] - x2))
 
-    nome_arquivo = f"duelo_{p1_name}_vs_{p2_name}.mp4"
+        # Rodar o sprite do carro
+        car1_rot = car1_raw.rotate(angle1 - 90, expand=True)
+        car2_rot = car2_raw.rotate(angle2 - 90, expand=True)
+
+        # Adicionar à imagem
+        im_box1 = OffsetImage(car1_rot, zoom=0.06)
+        box_p1[0] = AnnotationBbox(im_box1, (x1, y1), frameon=False)
+        ax.add_artist(box_p1[0])
+
+        im_box2 = OffsetImage(car2_rot, zoom=0.06)
+        box_p2[0] = AnnotationBbox(im_box2, (x2, y2), frameon=False)
+        ax.add_artist(box_p2[0])
+
+        return box_p1[0], box_p2[0]
+
+    anim = FuncAnimation(fig, update, frames=total_frames, interval=1000/fps, blit=False)
+    nome_arquivo = f"duelo_{p1_code}_vs_{p2_code}.mp4"
     anim.save(nome_arquivo, writer='ffmpeg', fps=fps)
     plt.close(fig)
 
@@ -105,56 +119,38 @@ def gerar_video_duelo(gp_nome, p1_name, p2_name, ultrapassagem, duracao_segundos
 
 # --- INTERFACE STREAMLIT ---
 
-st.set_page_config(page_title="Gerador de Duelos F1", layout="centered")
+st.set_page_config(page_title="Gerador F1 HD", layout="centered")
 
-st.title("🏎️ Gerador de Duelos F1 - TikTok")
-st.write("Crie simulações de corridas em vídeo vertical instantaneamente sem erros de conexão!")
+st.title("🏎️ Gerador de Duelos F1 - HD")
+st.write("Crie simulações com os carros e circuitos oficiais!")
 
-st.sidebar.header("⚙️ Configurações da Pista")
+st.sidebar.header("⚙️ Opções do Duelo")
 
-circuitos = [
-    "Sao Paulo (Interlagos)",
-    "Monaco",
-    "Monza",
-    "Spa-Francorchamps",
-    "Silverstone"
-]
-gp_selecionado = st.sidebar.selectbox("Selecione o Circuito", circuitos)
+pistas_disponiveis = ["MONZA", "INTERLAGOS"]
+gp_selecionado = st.sidebar.selectbox("Selecione o Circuito", pistas_disponiveis)
 
-st.sidebar.header("🏁 Pilotos")
-pilotos_lista = ["VER", "NOR", "HAM", "LEC", "SAI", "PIA", "RUS", "ALO", "SENNA", "SCHUMACHER"]
-
+pilotos_disponiveis = ["VER", "HAM", "ANT"]
 col1, col2 = st.sidebar.columns(2)
 with col1:
-    p1 = st.selectbox("Piloto 1", pilotos_lista, index=0)
+    p1 = st.selectbox("Piloto 1", pilotos_disponiveis, index=0)
 with col2:
-    p2 = st.selectbox("Piloto 2", pilotos_lista, index=1)
+    p2 = st.selectbox("Piloto 2", pilotos_disponiveis, index=1)
 
-st.sidebar.header("🎬 Opções do Vídeo")
-ultrapassagem = st.sidebar.checkbox("Simular Ultrapassagem no Vídeo", value=True)
-duracao = st.sidebar.slider("Duração (segundos)", min_value=15, max_value=60, value=30, step=15)
+duracao = st.sidebar.slider("Duração do Vídeo (segundos)", min_value=15, max_value=60, value=30, step=15)
 
-if st.button("🚀 Gerar Vídeo do Duelo", type="primary"):
+if st.button("🚀 Gerar Vídeo HD", type="primary"):
     try:
-        with st.spinner("A renderizar a animação do duelo..."):
-            arquivo_video = gerar_video_duelo(
-                gp_nome=gp_selecionado,
-                p1_name=p1,
-                p2_name=p2,
-                ultrapassagem=ultrapassagem,
-                duracao_segundos=duracao,
-                fps=30
+        with st.spinner("A renderizar animação HD com os carros na pista..."):
+            arquivo_video = gerar_video_hd(
+                pista_nome=gp_selecionado,
+                p1_code=p1,
+                p2_code=p2,
+                duracao_segundos=duracao
             )
-
             st.success("✅ Vídeo gerado com sucesso!")
             st.video(arquivo_video)
 
             with open(arquivo_video, "rb") as file:
-                st.download_button(
-                    label="📥 Baixar Vídeo MP4",
-                    data=file,
-                    file_name=arquivo_video,
-                    mime="video/mp4"
-                )
+                st.download_button("📥 Baixar MP4", data=file, file_name=arquivo_video, mime="video/mp4")
     except Exception as e:
-        st.error(f"❌ Ocorreu um erro: {e}")
+        st.error(f"❌ Erro ao gerar vídeo: {e}")
