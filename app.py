@@ -1,7 +1,7 @@
 import os
 import imageio_ffmpeg
 import matplotlib
-matplotlib.use('Agg')  # Evita erros de interface no servidor
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import numpy as np
@@ -11,36 +11,51 @@ import streamlit as st
 # Configura o FFmpeg integrado
 plt.rcParams['animation.ffmpeg_path'] = imageio_ffmpeg.get_ffmpeg_exe()
 
-# 1. Cria a pasta de cache se não existir
+# Cache local do FastF1
 os.makedirs('cache_f1', exist_ok=True)
 fastf1.Cache.enable_cache('cache_f1')
 
 
-# 2. Função principal para gerar o vídeo customizado
 def gerar_video_customizado(ano, gp, tipo_sessao, p1_code, p2_code, volta_inicio, volta_fim, duracao_segundos, fps=30):
     total_frames = duracao_segundos * fps
 
-    # Carrega dados da sessão
-    session = fastf1.get_session(ano, gp, tipo_sessao)
-    session.load(laps=True, telemetry=True, weather=False)
+    # Tenta obter a sessão
+    try:
+        session = fastf1.get_session(ano, gp, tipo_sessao)
+        session.load(laps=True, telemetry=True, weather=False)
+    except Exception as e:
+        raise ValueError(f"Não foi possível descarregar os dados do GP '{gp}' ({ano}). Verifique se o nome do GP está correto (ex: 'Sao Paulo', 'Monaco', 'Silverstone').")
 
-    # Filtra as voltas dos pilotos escolhidos
+    if not hasattr(session, 'laps') or session.laps is None or len(session.laps) == 0:
+        raise ValueError("A sessão foi encontrada, mas não existem dados de voltas disponíveis para esta etapa.")
+
+    # Filtra os pilotos
     laps_p1 = session.laps.pick_driver(p1_code)
-    laps_p1 = laps_p1[(laps_p1['LapNumber'] >= volta_inicio) & (laps_p1['LapNumber'] <= volta_fim)]
-
     laps_p2 = session.laps.pick_driver(p2_code)
+
+    if len(laps_p1) == 0:
+        pilotos_disponiveis = ", ".join(sorted(session.laps['Driver'].unique()))
+        raise ValueError(f"O piloto '{p1_code}' não foi encontrado nesta sessão. Pilotos disponíveis: {pilotos_disponiveis}")
+
+    if len(laps_p2) == 0:
+        pilotos_disponiveis = ", ".join(sorted(session.laps['Driver'].unique()))
+        raise ValueError(f"O piloto '{p2_code}' não foi encontrado nesta sessão. Pilotos disponíveis: {pilotos_disponiveis}")
+
+    # Filtra o intervalo de voltas
+    laps_p1 = laps_p1[(laps_p1['LapNumber'] >= volta_inicio) & (laps_p1['LapNumber'] <= volta_fim)]
     laps_p2 = laps_p2[(laps_p2['LapNumber'] >= volta_inicio) & (laps_p2['LapNumber'] <= volta_fim)]
 
     if len(laps_p1) == 0 or len(laps_p2) == 0:
-        raise ValueError("Não foram encontradas voltas válidas para os pilotos nesse intervalo.")
+        max_volta = int(session.laps['LapNumber'].max())
+        raise ValueError(f"Sem dados para o intervalo de voltas {volta_inicio} a {volta_fim}. O número máximo de voltas registado nesta sessão foi {max_volta}.")
 
     tel1 = laps_p1.get_telemetry()
     tel2 = laps_p2.get_telemetry()
 
     if len(tel1) == 0 or len(tel2) == 0:
-        raise ValueError("Não há telemetria disponível para este trecho.")
+        raise ValueError("Não foi possível extrair a telemetria das voltas selecionadas.")
 
-    # Reamostragem de tempo
+    # Reamostragem para animação
     time_orig1 = np.linspace(0, 1, len(tel1))
     time_orig2 = np.linspace(0, 1, len(tel2))
     target_time = np.linspace(0, 1, total_frames)
@@ -51,19 +66,19 @@ def gerar_video_customizado(ano, gp, tipo_sessao, p1_code, p2_code, volta_inicio
     x2_interp = np.interp(target_time, time_orig2, tel2['X'])
     y2_interp = np.interp(target_time, time_orig2, tel2['Y'])
 
-    # Configura o gráfico 9:16 (Vertical / TikTok)
+    # Figura 9:16 (Vertical)
     fig, ax = plt.subplots(figsize=(9, 16), facecolor='#0e0e10')
     ax.set_facecolor('#0e0e10')
     ax.axis('off')
 
-    # Desenha o traçado da pista
+    # Traçado
     ax.plot(tel1['Y'], tel1['X'], color='#33333e', linewidth=3)
 
-    # Pontos representando os carros
+    # Carros
     p1, = ax.plot([], [], 'o', color='#1E41FF', markersize=14, label=p1_code)
     p2, = ax.plot([], [], 'o', color='#FF8000', markersize=14, label=p2_code)
 
-    # Título do duelo na tela
+    # Textos
     ax.text(0.5, 0.96, f"{p1_code} vs {p2_code}", transform=ax.transAxes,
             color='white', fontsize=22, fontweight='bold', ha='center')
     ax.text(0.5, 0.93, f"{gp} {ano}", transform=ax.transAxes,
@@ -89,7 +104,7 @@ def gerar_video_customizado(ano, gp, tipo_sessao, p1_code, p2_code, volta_inicio
     return nome_arquivo
 
 
-# 3. Interface Web Personalizável
+# Interface Web (Streamlit)
 st.set_page_config(page_title="Gerador F1 TikTok", layout="centered")
 
 st.title("🏎️ Gerador de Duelos F1 - TikTok")
@@ -97,9 +112,8 @@ st.write("Escolha a corrida, os pilotos e o intervalo de voltas para criar o ví
 
 st.sidebar.header("⚙️ Configurações da Corrida")
 
-# Formulário de Entradas
 ano = st.sidebar.number_input("Ano da Temporada", min_value=2018, max_value=2026, value=2024)
-gp = st.sidebar.text_input("Nome da Pista / GP", value="Interlagos", help="Ex: Interlagos, Monaco, Silverstone, Monza, Spa")
+gp = st.sidebar.text_input("Nome da Pista / GP", value="Sao Paulo", help="Ex: Sao Paulo, Monaco, Silverstone, Monza, Spa")
 tipo_sessao = st.sidebar.selectbox("Tipo de Sessão", ["R", "Q", "FP1", "FP2", "FP3"], index=0, help="R = Corrida, Q = Qualificação")
 
 st.sidebar.header("🏁 Pilotos e Voltas")
@@ -117,10 +131,9 @@ with col4:
 
 duracao_segundos = st.sidebar.slider("Duração do Vídeo (segundos)", min_value=15, max_value=120, value=60, step=15)
 
-# Botão principal
 if st.button("🚀 Gerar Vídeo Personalizado", type="primary"):
     try:
-        with st.spinner(f"Baixando telemetria e renderizando {p1_code} vs {p2_code}... Isso pode levar de 1 a 2 minutos."):
+        with st.spinner(f"A carregar a telemetria e a gerar o vídeo de {p1_code} vs {p2_code}..."):
             nome_video = gerar_video_customizado(
                 ano=ano,
                 gp=gp,
@@ -144,4 +157,4 @@ if st.button("🚀 Gerar Vídeo Personalizado", type="primary"):
                     mime="video/mp4"
                 )
     except Exception as e:
-        st.error(f"❌ Ocorreu um erro ao gerar o vídeo: {e}")
+        st.error(f"❌ {e}")
