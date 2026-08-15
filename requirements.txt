@@ -3,3 +3,4 @@ matplotlib
 imageio-ffmpeg
 numpy
 Pillow
+FastF1
