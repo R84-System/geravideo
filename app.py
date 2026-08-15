@@ -13,17 +13,17 @@ import streamlit as st
 plt.rcParams['animation.ffmpeg_path'] = imageio_ffmpeg.get_ffmpeg_exe()
 
 
-def gerar_trajeto_vetorizado(pista_nome, n_points=800):
-    """Gera o traçado limpo e geométrico da pista por coordenadas matemáticas exatas."""
+def gerar_trajeto_vetorizado(pista_nome, n_points=900):
+    """Gera um trajeto geométrico com formato real de circuito (retas e curvas fechadas)."""
     t = np.linspace(0, 2 * np.pi, n_points)
     
     if "MONZA" in pista_nome.upper():
-        # Traçado geométrico estilo infográfico para Monza (Retas longas e chicanes)
-        x = 0.5 + 0.25 * np.cos(t) + 0.08 * np.cos(3*t)
-        y = 0.5 + 0.38 * np.sin(t)
+        # Formato retangular alongado (característico de Monza: retas grandes e chicanes)
+        x = 0.5 + 0.22 * np.sin(t)
+        y = 0.5 + 0.38 * np.cos(t) + 0.05 * np.cos(3*t)
     else:
-        # Traçado geométrico estilo infográfico para Interlagos (S do Senna e retas)
-        x = 0.5 + 0.30 * np.cos(t) + 0.10 * np.sin(2*t)
+        # Formato técnico para Interlagos (com S do Senna e curvas encadeadas)
+        x = 0.5 + 0.30 * np.cos(t) + 0.08 * np.sin(2*t)
         y = 0.5 + 0.32 * np.sin(t) - 0.08 * np.cos(3*t)
         
     return x, y
@@ -32,7 +32,7 @@ def gerar_trajeto_vetorizado(pista_nome, n_points=800):
 def gerar_video_vetorizado(pista_nome, p1_code, p2_code, duracao_segundos=30, fps=30):
     total_frames = duracao_segundos * fps
 
-    # Caminhos apenas das imagens dos carros (a pista agora é desenhada por código!)
+    # Caminhos das imagens dos carros
     car1_path = f"assets/cars/{p1_code}.png"
     car2_path = f"assets/cars/{p2_code}.png"
 
@@ -41,13 +41,13 @@ def gerar_video_vetorizado(pista_nome, p1_code, p2_code, duracao_segundos=30, fp
     if not os.path.exists(car2_path):
         raise FileNotFoundError(f"Imagem do carro não encontrada em: {car2_path}")
 
-    # Obter as coordenadas exatas da pista vetorizada (escala de 0 a 100)
+    # Coordenadas da pista vetorizada
     norm_x, norm_y = gerar_trajeto_vetorizado(pista_nome)
     
     # Mapeando para o tamanho da tela vertical (9:16)
     largura_canvas, altura_canvas = 600, 1060
-    x_track = norm_x * 360 + 120
-    y_track = norm_y * 650 + 205
+    x_track = norm_x * 350 + 125
+    y_track = norm_y * 620 + 220
     num_pts = len(x_track)
 
     # Posições dos dois carros na pista
@@ -58,18 +58,18 @@ def gerar_video_vetorizado(pista_nome, p1_code, p2_code, duracao_segundos=30, fp
     car1_raw = Image.open(car1_path).convert("RGBA")
     car2_raw = Image.open(car2_path).convert("RGBA")
 
-    # Configuração da Figura Vertical 9:16 com visual moderno de transmissão
+    # Configuração da Figura Vertical 9:16
     fig, ax = plt.subplots(figsize=(6, 10.6), facecolor='#0b0b0e')
     ax.set_facecolor('#0b0b0e')
     ax.set_xlim(0, largura_canvas)
     ax.set_ylim(0, altura_canvas)
     ax.axis('off')
 
-    # DESENHA A PISTA VETORIZADA NA TELA (Linha de fundo e bordas brilhantes)
-    ax.plot(x_track, y_track, color='#1f242d', linewidth=28, solid_capstyle='round', zorder=1)
+    # DESENHA A PISTA COM FORMATO DE CIRCUITO REAL
+    ax.plot(x_track, y_track, color='#1f242d', linewidth=30, solid_capstyle='round', zorder=1)
     ax.plot(x_track, y_track, color='#ffffff', linewidth=6, linestyle='-', alpha=0.9, zorder=2)
 
-    # Títulos e Informações na Tela
+    # Títulos
     ax.text(largura_canvas / 2, altura_canvas * 0.93, f"{p1_code} vs {p2_code}", 
             color='white', fontsize=22, fontweight='bold', ha='center', fontfamily='sans-serif')
     ax.text(largura_canvas / 2, altura_canvas * 0.89, f"GP DE {pista_nome.upper()} • TELEMETRIA", 
@@ -88,7 +88,7 @@ def gerar_video_vetorizado(pista_nome, p1_code, p2_code, duracao_segundos=30, fp
         x1, y1 = x_track[idx1], y_track[idx1]
         x2, y2 = x_track[idx2], y_track[idx2]
 
-        # Calcular a direção exata para o carro apontar e fazer a curva
+        # Direção da rotação do carro
         idx1_next = (idx1 + 3) % num_pts
         angle1 = np.degrees(np.arctan2(y_track[idx1_next] - y1, x_track[idx1_next] - x1))
 
@@ -99,7 +99,6 @@ def gerar_video_vetorizado(pista_nome, p1_code, p2_code, duracao_segundos=30, fp
         car1_rot = car1_raw.rotate(angle1 - 90, expand=True)
         car2_rot = car2_raw.rotate(angle2 - 90, expand=True)
 
-        # Zoom ajustado para os carros ficarem bem visíveis e proporcionais na pista vetorizada
         im_box1 = OffsetImage(car1_rot, zoom=0.06)
         box_p1[0] = AnnotationBbox(im_box1, (x1, y1), frameon=False, zorder=3)
         ax.add_artist(box_p1[0])
@@ -123,7 +122,7 @@ def gerar_video_vetorizado(pista_nome, p1_code, p2_code, duracao_segundos=30, fp
 st.set_page_config(page_title="Gerador F1 Vetorizado", layout="centered")
 
 st.title("🏎️ Duelos F1 - Modo Vetorizado HD")
-st.write("Simulação limpa e profissional com os carros na pista traçada por código!")
+st.write("Simulação com traçado em formato de circuito real!")
 
 st.sidebar.header("⚙️ Configurações do Vídeo")
 
@@ -141,7 +140,7 @@ duracao = st.sidebar.slider("Duração do Vídeo (segundos)", min_value=15, max_
 
 if st.button("🚀 Gerar Vídeo Vetorizado", type="primary"):
     try:
-        with st.spinner("A desenhar a pista e renderizar a animação..."):
+        with st.spinner("A desenhar o circuito real e renderizar a animação..."):
             arquivo_video = gerar_video_vetorizado(
                 pista_nome=gp_selecionado,
                 p1_code=p1,
