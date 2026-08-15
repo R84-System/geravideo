@@ -10,15 +10,17 @@ import numpy as np
 import streamlit as st
 import fastf1
 
-# Configura o FFmpeg integrado para salvar o vídeo
+# Configura o FFmpeg integrado para salvar o vídeo corretamente
 plt.rcParams['animation.ffmpeg_path'] = imageio_ffmpeg.get_ffmpeg_exe()
 
 @st.cache_data
 def carregar_telemetria_f1(ano, gp, p1_code, p2_code):
-    """Baixa e processa os dados reais de telemetria da F1 usando FastF1."""
+    """Baixa e processa os dados reais de telemetria da F1 usando FastF1 com carregamento completo."""
     session = fastf1.get_session(ano, gp, 'R')
-    session.load(telemetry=True, weather=False, messages=False)
+    # O carregamento precisa incluir telemetry=True e laps=True para evitar erros
+    session.load(telemetry=True, laps=True, weather=False, messages=False)
     
+    # Pega a volta mais rápida de cada piloto para simular o traçado e posições
     lap_p1 = session.laps.pick_driver(p1_code).pick_fastest()
     lap_p2 = session.laps.pick_driver(p2_code).pick_fastest()
     
